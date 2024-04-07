@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <DbgHelp.h>
+#include <string>
 #include <iostream>
 #include <fstream>
 #include <tchar.h>
@@ -15,7 +16,7 @@ void PrintStackTrace(DWORD dwProcessId, DWORD dwThreadId)
     STACKFRAME64 stackFrame;
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId());
     HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, dwThreadId);
-    outfile << "Process ID: " << dwProcessId << "Thread ID: " << dwThreadId << "HANDLE_hProcess: " << hProcess << "HANDLE_hThread: " << hThread << std::endl;
+    outfile << "Process ID: " << dwProcessId << " Thread ID: " << dwThreadId << " HANDLE_hProcess: " << hProcess << " HANDLE_hThread: " << hThread << std::endl;
     if (hThread == NULL)
     {
         outfile << "Failed to open thread: " << GetLastError() << std::endl;
@@ -64,7 +65,7 @@ int PrintStackTrace2(PEXCEPTION_POINTERS pExceptionPointers)
     STACKFRAME64 stackFrame;
     HANDLE hProcess = GetCurrentProcess();
     HANDLE hThread = GetCurrentThread();
-    outfile << "Process ID: " << GetCurrentProcessId() << "Thread ID: " << GetCurrentThreadId() << "HANDLE_hProcess: " << hProcess << "HANDLE_hThread: " << hThread << std::endl;
+    outfile << "Process ID: " << GetCurrentProcessId() << " Thread ID: " << GetCurrentThreadId() << " HANDLE_hProcess: " << hProcess << " HANDLE_hThread: " << hThread << std::endl;
     SymInitialize(
         hProcess,
         nullptr,
@@ -91,8 +92,37 @@ int PrintStackTrace2(PEXCEPTION_POINTERS pExceptionPointers)
         SymGetModuleBase64,       // 获取模块基址的函数
         NULL))                    // 使用默认的加载模块回调函数
     {
-        // 输出堆栈帧的地址
-        outfile << "Address: " << std::hex << stackFrame.AddrPC.Offset << std::endl;
+        TCHAR noBuffer[] = "";
+        TCHAR *pSymbolName = noBuffer;
+        DWORD64 dwDisplacement = 0;
+        DWORD64 dwAddress = stackFrame.AddrPC.Offset;
+
+        TCHAR buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)] = {0};
+        PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer;
+
+        pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        pSymbol->MaxNameLen = MAX_SYM_NAME;
+
+        if (SymFromAddr(hProcess, dwAddress, &dwDisplacement, pSymbol))
+        {
+            pSymbolName = pSymbol->Name;
+        }
+
+        DWORD dwDisplacement2;
+        IMAGEHLP_LINE64 line;
+        SymSetOptions(SYMOPT_LOAD_LINES);
+        line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+        BOOL getLine = SymGetLineFromAddr64(hProcess, dwAddress, &dwDisplacement2, &line);
+        if (getLine)
+        {
+            // 输出堆栈帧的地址
+            outfile << "Address: " << std::hex << stackFrame.AddrPC.Offset << " SymbolNmae: " << pSymbolName << " FileName: " << line.FileName << " : " << std::format("{}", line.LineNumber) << std::endl;
+        }
+        else
+        {
+            // 输出堆栈帧的地址
+            outfile << "Address: " << std::hex << stackFrame.AddrPC.Offset << " SymbolNmae: " << pSymbolName << std::endl;
+        }
     }
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -152,18 +182,22 @@ LONG WINAPI UnhandledExceptionFilterFunc1(EXCEPTION_POINTERS *exceptionPointers)
     // 继续搜索下一个异常过滤器
     return EXCEPTION_CONTINUE_SEARCH;
 }
+void exceptionFunction()
+{
+    // 故意触发一个异常，以便测试
+    int *ptr = nullptr;
+    *ptr = 42;
+}
 int _tmain(int argc, TCHAR *argv[])
 {
-    setCommandLine();
-    UnhandledExceptionFilterFunc(nullptr);
-    // 设置未处理异常过滤器
-    // SetUnhandledExceptionFilter(UnhandledExceptionFilterFunc);
+    // setCommandLine();
+    // UnhandledExceptionFilterFunc(nullptr);
+    //  设置未处理异常过滤器
+    //  SetUnhandledExceptionFilter(UnhandledExceptionFilterFunc);
 
     __try
     {
-        // 故意触发一个异常，以便测试
-        int *ptr = nullptr;
-        *ptr = 42;
+        exceptionFunction();
     }
     __except (PrintStackTrace2(GetExceptionInformation()))
     {
