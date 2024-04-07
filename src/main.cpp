@@ -1,10 +1,103 @@
-#include <windows.h>
+#include <Windows.h>
+#include <DbgHelp.h>
 #include <iostream>
+#include <fstream>
 #include <tchar.h>
+#pragma comment(lib, "DbgHelp")
+std::ofstream outfile("example.txt");
 
 // 调试程序路径
 TCHAR CommandLine[255];
-int setCommandLine() {
+// 输出线程的调用堆栈信息
+void PrintStackTrace(DWORD dwProcessId, DWORD dwThreadId)
+{
+    CONTEXT context;
+    STACKFRAME64 stackFrame;
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId());
+    HANDLE hThread = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, dwThreadId);
+    outfile << "Process ID: " << dwProcessId << "Thread ID: " << dwThreadId << "HANDLE_hProcess: " << hProcess << "HANDLE_hThread: " << hThread << std::endl;
+    if (hThread == NULL)
+    {
+        outfile << "Failed to open thread: " << GetLastError() << std::endl;
+        return;
+    }
+
+    // 获取线程的上下文
+    context.ContextFlags = CONTEXT_FULL;
+    if (!GetThreadContext(hThread, &context))
+    {
+        outfile << "Failed to get thread context: " << GetLastError() << std::endl;
+        CloseHandle(hThread);
+        return;
+    }
+
+    // 初始化堆栈帧
+    memset(&stackFrame, 0, sizeof(STACKFRAME64));
+    stackFrame.AddrPC.Mode = AddrModeFlat;
+    stackFrame.AddrPC.Offset = context.Rip; // RIP 寄存器保存了指令指针的地址
+    stackFrame.AddrFrame.Mode = AddrModeFlat;
+    stackFrame.AddrFrame.Offset = context.Rbp; // RBP 寄存器保存了当前栈帧的基址指针
+    stackFrame.AddrStack.Mode = AddrModeFlat;
+    stackFrame.AddrStack.Offset = context.Rsp; // RSP 寄存器保存了栈顶指针
+
+    // 输出调用堆栈信息
+    while (StackWalk64(
+        IMAGE_FILE_MACHINE_AMD64, // 指定是 64 位程序
+        hProcess,                 // 当前进程句柄
+        hThread,                  // 当前线程句柄
+        &stackFrame,              // 堆栈帧结构体
+        &context,                 // 线程上下文
+        NULL,                     // 函数表
+        SymFunctionTableAccess64, // 获取函数表的函数
+        SymGetModuleBase64,       // 获取模块基址的函数
+        NULL))                    // 使用默认的加载模块回调函数
+    {
+        // 输出堆栈帧的地址
+        outfile << "Address: " << std::hex << stackFrame.AddrPC.Offset << std::endl;
+    }
+
+    CloseHandle(hThread);
+}
+// 输出线程的调用堆栈信息
+int PrintStackTrace2(PEXCEPTION_POINTERS pExceptionPointers)
+{
+    STACKFRAME64 stackFrame;
+    HANDLE hProcess = GetCurrentProcess();
+    HANDLE hThread = GetCurrentThread();
+    outfile << "Process ID: " << GetCurrentProcessId() << "Thread ID: " << GetCurrentThreadId() << "HANDLE_hProcess: " << hProcess << "HANDLE_hThread: " << hThread << std::endl;
+    SymInitialize(
+        hProcess,
+        nullptr,
+        TRUE);
+    CONTEXT context = *(pExceptionPointers->ContextRecord);
+    // 初始化堆栈帧
+    memset(&stackFrame, 0, sizeof(STACKFRAME64));
+    stackFrame.AddrPC.Mode = AddrModeFlat;
+    stackFrame.AddrPC.Offset = context.Rip; // RIP 寄存器保存了指令指针的地址
+    stackFrame.AddrFrame.Mode = AddrModeFlat;
+    stackFrame.AddrFrame.Offset = context.Rbp; // RBP 寄存器保存了当前栈帧的基址指针
+    stackFrame.AddrStack.Mode = AddrModeFlat;
+    stackFrame.AddrStack.Offset = context.Rsp; // RSP 寄存器保存了栈顶指针
+
+    // 输出调用堆栈信息
+    while (StackWalk64(
+        IMAGE_FILE_MACHINE_AMD64, // 指定是 64 位程序
+        hProcess,                 // 当前进程句柄
+        hThread,                  // 当前线程句柄
+        &stackFrame,              // 堆栈帧结构体
+        &context,                 // 线程上下文
+        NULL,                     // 函数表
+        SymFunctionTableAccess64, // 获取函数表的函数
+        SymGetModuleBase64,       // 获取模块基址的函数
+        NULL))                    // 使用默认的加载模块回调函数
+    {
+        // 输出堆栈帧的地址
+        outfile << "Address: " << std::hex << stackFrame.AddrPC.Offset << std::endl;
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+int setCommandLine()
+{
     int intValue = 42;
     float floatValue = 3.14f;
 
@@ -12,24 +105,37 @@ int setCommandLine() {
     int length = snprintf(CommandLine, sizeof(CommandLine), "ExceptionStackInformationTracking.exe %d", GetCurrentProcessId());
 
     // 检查格式化是否成功
-    if (length >= 0 && length < sizeof(CommandLine)) {
+    if (length >= 0 && length < sizeof(CommandLine))
+    {
         // 输出格式化后的字符串
         printf("Formatted string: %s\n", CommandLine);
-    } else {
+    }
+    else
+    {
         // 格式化失败，输出错误消息
         printf("Error: Buffer overflow occurred.\n");
     }
-
+    PrintStackTrace(GetCurrentProcessId(), GetCurrentThreadId());
     return 0;
 }
 // 未处理异常过滤器函数
-LONG WINAPI UnhandledExceptionFilterFunc(EXCEPTION_POINTERS* exceptionPointers) {
+LONG WINAPI UnhandledExceptionFilterFunc(EXCEPTION_POINTERS *exceptionPointers)
+{
+    PrintStackTrace(GetCurrentProcessId(), GetCurrentThreadId());
+
+    // 继续搜索下一个异常过滤器
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+// 未处理异常过滤器函数
+LONG WINAPI UnhandledExceptionFilterFunc1(EXCEPTION_POINTERS *exceptionPointers)
+{
     std::cout << "Unhandled exception occurred. Starting debug program..." << std::endl;
 
     // 启动调试程序
-    STARTUPINFO si = { sizeof(STARTUPINFO) };
+    STARTUPINFO si = {sizeof(STARTUPINFO)};
     PROCESS_INFORMATION pi;
-    if (!CreateProcess(NULL, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    if (!CreateProcess(NULL, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+    {
         std::cerr << "Failed to start debug program: " << GetLastError() << std::endl;
         return EXCEPTION_CONTINUE_SEARCH; // 继续搜索下一个异常过滤器
     }
@@ -46,16 +152,22 @@ LONG WINAPI UnhandledExceptionFilterFunc(EXCEPTION_POINTERS* exceptionPointers) 
     // 继续搜索下一个异常过滤器
     return EXCEPTION_CONTINUE_SEARCH;
 }
-
-int _tmain(int argc, TCHAR* argv[]) {
+int _tmain(int argc, TCHAR *argv[])
+{
     setCommandLine();
     UnhandledExceptionFilterFunc(nullptr);
     // 设置未处理异常过滤器
-    //SetUnhandledExceptionFilter(UnhandledExceptionFilterFunc);
+    // SetUnhandledExceptionFilter(UnhandledExceptionFilterFunc);
 
-    // 故意触发一个异常，以便测试
-    int* ptr = nullptr;
-    *ptr = 42;
-
+    __try
+    {
+        // 故意触发一个异常，以便测试
+        int *ptr = nullptr;
+        *ptr = 42;
+    }
+    __except (PrintStackTrace2(GetExceptionInformation()))
+    {
+        return -1;
+    }
     return 0;
 }
